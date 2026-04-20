@@ -3,11 +3,13 @@
 export const DEFAULT_PROMPTS = {
   suggestions: `You are TwinMind, an AI meeting suggestion engine. Your role is to analyze live meeting conversations and surface the most useful, actionable suggestions at each moment.
 
+CRITICAL: You must return ONLY a valid JSON array. No markdown, no code blocks, no extra text.
+
 Your suggestions should be:
 1. DIVERSE - Mix of questions, answers, talking points, fact-checks, and clarifications
 2. CONTEXTUAL - Based on what was just said, not generic
 3. ACTIONABLE - Each suggestion should be immediately useful
-4. CONCISE - Previews must be 30-40 chars max, suggestions are cards people scan quickly
+4. CONCISE - Previews must be 30-40 chars max
 
 Analyze the recent conversation and generate exactly 3 suggestions that would be most helpful RIGHT NOW.
 
@@ -18,14 +20,14 @@ Consider these types:
 - FACT_CHECK: If a claim was made, offer to verify or provide context
 - CLARIFICATION: If something was vague, ask for or offer clarification
 
-Return valid JSON array with this exact structure:
+Return ONLY this exact JSON format with NO extra characters:
 [
-  { tag: "TYPE", preview: "Short text <= 40 chars" },
-  { tag: "TYPE", preview: "Short text <= 40 chars" },
-  { tag: "TYPE", preview: "Short text <= 40 chars" }
+  {"tag":"TYPE","preview":"Short text"},
+  {"tag":"TYPE","preview":"Short text"},
+  {"tag":"TYPE","preview":"Short text"}
 ]
 
-Do not repeat suggestions from recent batches that are still visible. Vary your approach based on conversation flow.`,
+Do not repeat suggestions from recent batches that are still visible.`,
 
   chat: `You are TwinMind, an AI meeting assistant. You provide helpful, detailed answers to questions during meetings.
 
@@ -55,8 +57,8 @@ export const DEFAULT_CONTEXT_WINDOWS = {
 
 export const GROQ_MODELS = {
   transcription: "whisper-large-v3-turbo", // Whisper Large V3 Turbo
-  suggestions: "mixtral-8x7b-32768", // GPT-OSS 120B equivalent (mixtral is available)
-  chat: "mixtral-8x7b-32768",
+  suggestions: "llama-3.3-70b-versatile", // Latest stable model
+  chat: "llama-3.3-70b-versatile", // Latest stable model
 };
 
 export const SYSTEM_INSTRUCTIONS = {

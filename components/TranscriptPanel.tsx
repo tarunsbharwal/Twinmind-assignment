@@ -17,7 +17,7 @@ export function TranscriptPanel({ transcript }: TranscriptPanelProps) {
   }, [transcript]);
 
   return (
-    <div className="flex flex-col h-full bg-gray-900 border-r border-gray-700">
+    <div className="flex flex-col flex-1 bg-gray-900 border-r border-gray-700 min-h-0">
       <div className="px-4 py-3 border-b border-gray-700">
         <h2 className="text-sm font-semibold text-gray-400 uppercase">
           1. MIC & TRANSCRIPT
@@ -26,7 +26,7 @@ export function TranscriptPanel({ transcript }: TranscriptPanelProps) {
 
       <div
         ref={containerRef}
-        className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
+        className="flex-1 overflow-y-auto px-4 py-4 space-y-3 min-h-0"
       >
         {transcript.length === 0 ? (
           <div className="text-sm text-gray-500 italic">

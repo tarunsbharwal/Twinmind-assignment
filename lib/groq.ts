@@ -1,4 +1,5 @@
 import { Readable } from "stream";
+import { GROQ_MODELS } from "./prompts";
 
 export class GroqClient {
   private apiKey: string;
@@ -26,8 +27,17 @@ export class GroqClient {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(`Transcription failed: ${JSON.stringify(error)}`);
+      const errorText = await response.text();
+      console.error("Groq API Error Status:", response.status);
+      console.error("Groq API Error Body:", errorText);
+      let errorMessage = errorText;
+      try {
+        const error = JSON.parse(errorText);
+        errorMessage = error.error?.message || JSON.stringify(error);
+      } catch (e) {
+        // Response is not JSON
+      }
+      throw new Error(`Transcription failed: ${errorMessage}`);
     }
 
     const result = (await response.json()) as { text: string };
@@ -45,7 +55,7 @@ export class GroqClient {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "mixtral-8x7b-32768",
+        model: GROQ_MODELS.suggestions,
         messages: [
           {
             role: "system",
@@ -63,8 +73,17 @@ export class GroqClient {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(`Suggestions failed: ${JSON.stringify(error)}`);
+      const errorText = await response.text();
+      console.error("Groq API Error Status:", response.status);
+      console.error("Groq API Error Body:", errorText);
+      let errorMessage = errorText;
+      try {
+        const error = JSON.parse(errorText);
+        errorMessage = error.error?.message || JSON.stringify(error);
+      } catch (e) {
+        // Response is not JSON
+      }
+      throw new Error(`Suggestions failed: ${errorMessage}`);
     }
 
     return response.body as ReadableStream<Uint8Array>;
@@ -82,7 +101,7 @@ export class GroqClient {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "mixtral-8x7b-32768",
+        model: GROQ_MODELS.chat,
         messages: [
           {
             role: "system",
@@ -100,8 +119,17 @@ export class GroqClient {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(`Chat failed: ${JSON.stringify(error)}`);
+      const errorText = await response.text();
+      console.error("Groq API Error Status:", response.status);
+      console.error("Groq API Error Body:", errorText);
+      let errorMessage = errorText;
+      try {
+        const error = JSON.parse(errorText);
+        errorMessage = error.error?.message || JSON.stringify(error);
+      } catch (e) {
+        // Response is not JSON
+      }
+      throw new Error(`Chat failed: ${errorMessage}`);
     }
 
     return response.body as ReadableStream<Uint8Array>;

@@ -17,6 +17,8 @@ import {
 } from "@/lib/types";
 
 export default function Home() {
+  const [isMounted, setIsMounted] = useState(false);
+
   const {
     session,
     settings,
@@ -33,10 +35,14 @@ export default function Home() {
     onError: (error) => console.error("Audio capture error:", error),
   });
 
-  const [settingsOpen, setSettingsOpen] = useState(!settings.groqApiKey);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [suggestionsLoading, setLoadingSuggestions] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
   const suggestionsTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   // Handle incoming audio chunk - transcribe it
   async function handleAudioChunk(audioBase64: string) {
@@ -53,8 +59,15 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        console.error("Transcription error:", error);
+        const errorText = await response.text();
+        console.error("Transcription error status:", response.status);
+        console.error("Transcription error body:", errorText);
+        try {
+          const error = JSON.parse(errorText);
+          console.error("Transcription error JSON:", error);
+        } catch (e) {
+          console.error("Could not parse transcription error as JSON");
+        }
         return;
       }
 
@@ -103,8 +116,15 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        console.error("Suggestions error:", error);
+        const errorText = await response.text();
+        console.error("Suggestions error status:", response.status);
+        console.error("Suggestions error body:", errorText);
+        try {
+          const error = JSON.parse(errorText);
+          console.error("Suggestions error JSON:", error);
+        } catch (e) {
+          console.error("Could not parse error as JSON");
+        }
         return;
       }
 
@@ -112,7 +132,6 @@ export default function Home() {
       const reader = response.body?.getReader();
       if (!reader) return;
 
-      let buffer = "";
       let fullText = "";
 
       while (true) {
@@ -120,32 +139,132 @@ export default function Home() {
         if (done) break;
 
         const chunk = new TextDecoder().decode(value);
-        buffer += chunk;
-        fullText += chunk;
+        const lines = chunk.split("\n");
 
-        try {
-          const lines = buffer.split("\n");
-          buffer = lines[lines.length - 1];
-        } catch (e) {
-          // Keep buffering
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.substring(6);
+            if (data === "[DONE]") continue;
+
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.choices?.[0]?.delta?.content) {
+                fullText += parsed.choices[0].delta.content;
+              }
+            } catch (e) {
+              // Keep processing
+            }
+          }
         }
       }
 
-      // Try to extract JSON array from response text
-      const jsonMatch = fullText.match(/\[[\s\S]*\]/);
+      // Try to extract JSON array from accumulated text
+      console.log("Full suggestions response:", fullText);
+
+      // Try JSON parsing first
+      let suggestions: any[] = [];
+      let cleanText = repairJSON(fullText);
+
+      // More aggressive JSON extraction - look for [ ... ]
+      let jsonMatch = cleanText.match(/\[[\s\S]*\]/);
+
       if (jsonMatch) {
         try {
-          const parsed = JSON.parse(jsonMatch[0]);
-          const batch: SuggestionBatch = {
-            id: Math.random().toString(),
-            generatedAt: new Date().toISOString(),
-            suggestions: parsed,
-            sourcedFromTranscript: session.transcript.slice(-3),
-          };
-          addSuggestionBatch(batch);
+          let jsonStr = jsonMatch[0].trim();
+          jsonStr = repairJSON(jsonStr);
+          console.log("Attempting to parse JSON:", jsonStr);
+          const parsed = JSON.parse(jsonStr);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            // Validate suggestion structure
+            const validSuggestions = parsed.filter(
+              (s) => s.tag && s.preview && typeof s.tag === "string" && typeof s.preview === "string"
+            );
+            if (validSuggestions.length > 0) {
+              suggestions = validSuggestions;
+              console.log("✅ Suggestions parsed from JSON:", parsed);
+            }
+          }
         } catch (e) {
-          console.error("Failed to parse suggestions JSON:", e);
+          console.warn("JSON parsing failed:", e);
         }
+      }
+
+      // If JSON parsing failed, try regex extraction with better patterns
+      if (suggestions.length === 0) {
+        try {
+          console.log("Attempting regex extraction from:", fullText);
+
+          // Extract objects that look like suggestions
+          // Match patterns like: "tag":"QUESTION","preview":"What is X?"
+          const objectPattern = /\{\s*"tag"\s*:\s*"([^"]+)"\s*,\s*"preview"\s*:\s*"([^"]*?)"\s*\}/g;
+
+          let match;
+          while ((match = objectPattern.exec(fullText)) !== null) {
+            const tag = match[1];
+            const preview = match[2];
+
+            // Check if tag is valid
+            const validTags = ["ANSWER", "QUESTION", "TALKING_POINT", "FACT_CHECK", "CLARIFICATION"];
+            if (validTags.includes(tag) && preview.trim()) {
+              suggestions.push({ tag, preview });
+              console.log("Found suggestion:", tag, preview);
+            }
+          }
+
+          if (suggestions.length > 0) {
+            console.log("✅ Suggestions extracted from regex:", suggestions);
+          } else {
+            console.warn("Could not extract any suggestions - trying fallback extraction");
+
+            // Last resort: extract all tag:preview pairs regardless of format
+            const tagPattern = /"tag"\s*:\s*"([^"]+)"/g;
+            const previewPattern = /"preview"\s*:\s*"([^"]*?)"/g;
+
+            const tags: string[] = [];
+            const previews: string[] = [];
+
+            let tagMatch;
+            while ((tagMatch = tagPattern.exec(fullText)) !== null) {
+              tags.push(tagMatch[1]);
+            }
+
+            let previewMatch;
+            while ((previewMatch = previewPattern.exec(fullText)) !== null) {
+              previews.push(previewMatch[1]);
+            }
+
+            console.log("Fallback - Extracted tags:", tags);
+            console.log("Fallback - Extracted previews:", previews);
+
+            // Combine tags and previews
+            if (tags.length > 0 && previews.length > 0) {
+              suggestions = tags
+                .slice(0, 3)
+                .map((tag, i) => ({
+                  tag,
+                  preview: previews[i] || "",
+                }))
+                .filter((s) => s.preview && s.tag);
+
+              console.log("✅ Suggestions extracted from fallback:", suggestions);
+            }
+          }
+        } catch (e) {
+          console.error("Regex extraction also failed:", e);
+        }
+      }
+
+      // Add to session if we got suggestions
+      if (suggestions.length > 0) {
+        const batch: SuggestionBatch = {
+          id: Math.random().toString(),
+          generatedAt: new Date().toISOString(),
+          suggestions,
+          sourcedFromTranscript: session.transcript.slice(-3),
+        };
+        addSuggestionBatch(batch);
+      } else {
+        console.warn("Could not extract any suggestions from response");
       }
     } catch (error) {
       console.error("Suggestion generation error:", error);
@@ -219,8 +338,15 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        console.error("Chat error:", error);
+        const errorText = await response.text();
+        console.error("Chat error status:", response.status);
+        console.error("Chat error body:", errorText);
+        try {
+          const error = JSON.parse(errorText);
+          console.error("Chat error JSON:", error);
+        } catch (e) {
+          console.error("Could not parse chat error as JSON");
+        }
         return;
       }
 
@@ -235,24 +361,25 @@ export default function Home() {
         if (done) break;
 
         const chunk = new TextDecoder().decode(value);
-        try {
-          const lines = chunk.split("\n");
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              const data = line.substring(6);
-              if (data === "[DONE]") continue;
+        const lines = chunk.split("\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.substring(6);
+            if (data === "[DONE]") continue;
 
+            try {
               const parsed = JSON.parse(data);
               if (parsed.choices?.[0]?.delta?.content) {
                 fullResponse += parsed.choices[0].delta.content;
               }
+            } catch (e) {
+              // Keep processing
             }
           }
-        } catch (e) {
-          // Keep processing
         }
       }
 
+      console.log("Chat response received:", fullResponse);
       const latency = Date.now() - startTime;
       updateChatMessageResponse(messageId, fullResponse, latency);
     } catch (error) {
@@ -279,10 +406,33 @@ export default function Home() {
 
   // Require API key on page load
   useEffect(() => {
-    if (!settings.groqApiKey) {
+    if (isMounted && !settings.groqApiKey) {
       setSettingsOpen(true);
     }
-  }, []);
+  }, [isMounted, settings.groqApiKey]);
+
+  // Helper function to repair malformed JSON
+  function repairJSON(str: string): string {
+    // Remove any markdown code blocks
+    str = str.replace(/```json\n?/g, "").replace(/```\n?/g, "");
+
+    // Remove leading/trailing whitespace
+    str = str.trim();
+
+    // Fix missing colons between key and value (e.g., "preview "value"" -> "preview":"value")
+    str = str.replace(/"(\w+)\s+"([^"]+)"/g, '"$1":"$2"');
+
+    // Fix single quotes to double quotes (but be careful with contractions)
+    str = str.replace(/'/g, '"');
+
+    // Fix escaped quotes that might cause issues
+    str = str.replace(/\\"/g, '"');
+
+    // Fix newlines in string values
+    str = str.replace(/\n/g, " ");
+
+    return str;
+  }
 
   return (
     <main className="h-screen bg-gray-900 flex flex-col">
@@ -342,12 +492,14 @@ export default function Home() {
       </div>
 
       {/* Settings Modal */}
-      <SettingsModal
-        settings={settings}
-        onSave={setSettings}
-        isOpen={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-      />
+      <div suppressHydrationWarning>
+        <SettingsModal
+          settings={settings}
+          onSave={setSettings}
+          isOpen={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+        />
+      </div>
     </main>
   );
 }

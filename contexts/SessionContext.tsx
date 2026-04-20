@@ -68,7 +68,7 @@ function createInitialSettings(): SessionSettings {
   }
 
   return {
-    groqApiKey: "",
+    groqApiKey: process.env.NEXT_PUBLIC_GROQ_API_KEY || "",
     suggestionPrompt: DEFAULT_PROMPTS.suggestions,
     chatPrompt: DEFAULT_PROMPTS.chat,
     contextWindowSuggestions: DEFAULT_CONTEXT_WINDOWS.suggestions,
