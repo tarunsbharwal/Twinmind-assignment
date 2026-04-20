@@ -133,19 +133,36 @@ export default function Home() {
       if (!reader) return;
 
       let fullText = "";
+      let buffer = ""; // For accumulating incomplete lines
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
         const chunk = new TextDecoder().decode(value);
-        const lines = chunk.split("\n");
+        buffer += chunk;
+
+        // Split by newlines
+        const lines = buffer.split("\n");
+
+        // Keep the last incomplete line in the buffer
+        buffer = lines.pop() || "";
 
         for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const data = line.substring(6);
-            if (data === "[DONE]") continue;
+          if (!line.trim()) continue;
 
+          let data: string | null = null;
+
+          // Handle SSE format (data: {...})
+          if (line.startsWith("data: ")) {
+            data = line.substring(6);
+          }
+          // Handle raw newline-delimited JSON format (Groq API)
+          else if (line.startsWith("{")) {
+            data = line;
+          }
+
+          if (data && data !== "[DONE]") {
             try {
               const parsed = JSON.parse(data);
               if (parsed.choices?.[0]?.delta?.content) {
@@ -154,10 +171,23 @@ export default function Home() {
                 console.log("[Streaming] Received chunk:", JSON.stringify(content));
               }
             } catch (e) {
-              console.warn("[Streaming] Could not parse chunk:", data);
+              console.warn("[Streaming] Could not parse line:", line.substring(0, 100));
               // Keep processing
             }
           }
+        }
+      }
+
+      // Process any remaining data in buffer
+      if (buffer.trim() && buffer.trim() !== "[DONE]") {
+        try {
+          const parsed = JSON.parse(buffer);
+          if (parsed.choices?.[0]?.delta?.content) {
+            fullText += parsed.choices[0].delta.content;
+            console.log("[Streaming] Received final chunk:", JSON.stringify(parsed.choices[0].delta.content));
+          }
+        } catch (e) {
+          console.warn("[Streaming] Could not parse final buffer:", buffer.substring(0, 100));
         }
       }
 
