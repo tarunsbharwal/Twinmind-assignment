@@ -149,30 +149,43 @@ export default function Home() {
             try {
               const parsed = JSON.parse(data);
               if (parsed.choices?.[0]?.delta?.content) {
-                fullText += parsed.choices[0].delta.content;
+                const content = parsed.choices[0].delta.content;
+                fullText += content;
+                console.log("[Streaming] Received chunk:", JSON.stringify(content));
               }
             } catch (e) {
+              console.warn("[Streaming] Could not parse chunk:", data);
               // Keep processing
             }
           }
         }
       }
 
+      console.log("[Suggestions] Full text accumulated (" + fullText.length + " chars)");
+      console.log("[Suggestions] First 200 chars:", fullText.substring(0, 200));
+
       // Try to extract JSON array from accumulated text
-      console.log("Full suggestions response:", fullText);
+      console.log("[Parsing] Starting suggestion parsing...");
 
       // Try JSON parsing first
       let suggestions: any[] = [];
       let cleanText = repairJSON(fullText);
 
+      console.log("[Parsing] Cleaned text (" + cleanText.length + " chars)");
+      console.log("[Parsing] First 200 chars of cleaned:", cleanText.substring(0, 200));
+
       // More aggressive JSON extraction - look for [ ... ]
       let jsonMatch = cleanText.match(/\[[\s\S]*\]/);
 
       if (jsonMatch) {
+        console.log("[Parsing] Found potential JSON array");
         try {
           let jsonStr = jsonMatch[0].trim();
+          console.log("[Parsing] JSON match length:", jsonStr.length);
+          console.log("[Parsing] JSON match first 100 chars:", jsonStr.substring(0, 100));
+
           jsonStr = repairJSON(jsonStr);
-          console.log("Attempting to parse JSON:", jsonStr);
+          console.log("[Parsing] Attempting JSON.parse...");
           const parsed = JSON.parse(jsonStr);
           if (Array.isArray(parsed) && parsed.length > 0) {
             // Validate suggestion structure
@@ -181,18 +194,24 @@ export default function Home() {
             );
             if (validSuggestions.length > 0) {
               suggestions = validSuggestions;
-              console.log("✅ Suggestions parsed from JSON:", parsed);
+              console.log("✅ [Parsing] Suggestions parsed from JSON, found", validSuggestions.length, "items");
+            } else {
+              console.warn("[Parsing] Parsed JSON but no valid suggestions found");
             }
+          } else {
+            console.warn("[Parsing] Parsed JSON but not a non-empty array");
           }
         } catch (e) {
-          console.warn("JSON parsing failed:", e);
+          console.warn("[Parsing] JSON parsing failed:", e instanceof Error ? e.message : String(e));
         }
+      } else {
+        console.warn("[Parsing] No JSON array found in text");
       }
 
       // If JSON parsing failed, try regex extraction with better patterns
       if (suggestions.length === 0) {
         try {
-          console.log("Attempting regex extraction from:", fullText);
+          console.log("[Parsing] Attempting regex extraction...");
 
           // Extract objects that look like suggestions
           // Match patterns like: "tag":"QUESTION","preview":"What is X?"
@@ -207,14 +226,14 @@ export default function Home() {
             const validTags = ["ANSWER", "QUESTION", "TALKING_POINT", "FACT_CHECK", "CLARIFICATION"];
             if (validTags.includes(tag) && preview.trim()) {
               suggestions.push({ tag, preview });
-              console.log("Found suggestion:", tag, preview);
+              console.log("[Parsing] Found suggestion:", tag, preview);
             }
           }
 
           if (suggestions.length > 0) {
-            console.log("✅ Suggestions extracted from regex:", suggestions);
+            console.log("✅ [Parsing] Suggestions extracted from regex, found", suggestions.length, "items");
           } else {
-            console.warn("Could not extract any suggestions - trying fallback extraction");
+            console.warn("[Parsing] Regex extraction found no matches, trying fallback...");
 
             // Last resort: extract all tag:preview pairs regardless of format
             const tagPattern = /"tag"\s*:\s*"([^"]+)"/g;
@@ -233,8 +252,7 @@ export default function Home() {
               previews.push(previewMatch[1]);
             }
 
-            console.log("Fallback - Extracted tags:", tags);
-            console.log("Fallback - Extracted previews:", previews);
+            console.log("[Parsing] Fallback - found", tags.length, "tags and", previews.length, "previews");
 
             // Combine tags and previews
             if (tags.length > 0 && previews.length > 0) {
@@ -246,11 +264,13 @@ export default function Home() {
                 }))
                 .filter((s) => s.preview && s.tag);
 
-              console.log("✅ Suggestions extracted from fallback:", suggestions);
+              console.log("✅ [Parsing] Suggestions extracted from fallback, found", suggestions.length, "items");
+            } else {
+              console.warn("[Parsing] Fallback also failed - no tags or previews found");
             }
           }
         } catch (e) {
-          console.error("Regex extraction also failed:", e);
+          console.error("[Parsing] Regex extraction error:", e instanceof Error ? e.message : String(e));
         }
       }
 

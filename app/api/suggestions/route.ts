@@ -26,6 +26,9 @@ export async function POST(request: NextRequest) {
       prompt += `\n\nDO NOT repeat these recent suggestions: ${recentSuggestions}`;
     }
 
+    console.log("[Suggestions API] Generating suggestions for transcript:", transcript.substring(0, 100));
+    console.log("[Suggestions API] System prompt:", systemPrompt.substring(0, 100));
+
     const stream = await groq.generateSuggestions(transcript, prompt);
 
     if (!stream) {
@@ -34,6 +37,8 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
+
+    console.log("[Suggestions API] Stream received, forwarding to client");
 
     // Create a new Response with streaming body
     return new NextResponse(stream, {
@@ -44,7 +49,7 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error("Suggestions error:", error);
+    console.error("[Suggestions API] Error:", error);
     return NextResponse.json(
       {
         error:
@@ -54,3 +59,4 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
