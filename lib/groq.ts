@@ -13,8 +13,8 @@ export class GroqClient {
     const formData = new FormData();
     formData.append(
       "file",
-      new Blob([Buffer.from(audioBase64, "base64")], { type: "audio/wav" }),
-      "audio.wav"
+      new Blob([Buffer.from(audioBase64, "base64")], { type: "audio/webm" }),
+      "audio.webm"
     );
     formData.append("model", "whisper-large-v3-turbo");
 

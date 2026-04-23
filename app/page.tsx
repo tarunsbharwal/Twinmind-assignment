@@ -38,7 +38,6 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [suggestionsLoading, setLoadingSuggestions] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
-  const suggestionsTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     setIsMounted(true);
@@ -83,9 +82,6 @@ export default function Home() {
       };
 
       addTranscriptChunk(chunk);
-
-      // Auto-generate suggestions
-      await generateSuggestions();
     } catch (error) {
       console.error("Audio chunk handling error:", error);
     }
@@ -134,12 +130,19 @@ export default function Home() {
 
       let fullText = "";
       let buffer = ""; // For accumulating incomplete lines
+      let chunkCount = 0;
+      let lineCount = 0;
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          console.log("[Streaming] Stream ended after", chunkCount, "chunks and", lineCount, "lines");
+          break;
+        }
 
         const chunk = new TextDecoder().decode(value);
+        chunkCount++;
+        console.log("[Streaming] Chunk #" + chunkCount + " length:", chunk.length);
         buffer += chunk;
 
         // Split by newlines
@@ -149,29 +152,47 @@ export default function Home() {
         buffer = lines.pop() || "";
 
         for (const line of lines) {
-          if (!line.trim()) continue;
+          lineCount++;
+          if (!line.trim()) {
+            console.log("[Streaming] Line #" + lineCount + " empty");
+            continue;
+          }
+
+          console.log("[Streaming] Line #" + lineCount + ":", line.substring(0, 80));
 
           let data: string | null = null;
 
           // Handle SSE format (data: {...})
           if (line.startsWith("data: ")) {
             data = line.substring(6);
+            console.log("[Streaming]   -> SSE format detected");
           }
           // Handle raw newline-delimited JSON format (Groq API)
-          else if (line.startsWith("{")) {
+          else if (line.startsWith("{") || line.startsWith("[")) {
             data = line;
+            console.log("[Streaming]   -> Raw JSON format detected");
+          } else {
+            console.log("[Streaming]   -> Unknown format");
           }
 
           if (data && data !== "[DONE]") {
             try {
               const parsed = JSON.parse(data);
+              // Handle OpenAI streaming format
               if (parsed.choices?.[0]?.delta?.content) {
                 const content = parsed.choices[0].delta.content;
                 fullText += content;
-                console.log("[Streaming] Received chunk:", JSON.stringify(content));
+                console.log("[Streaming]   ✅ Extracted content:", JSON.stringify(content));
+              }
+              // Handle raw JSON array (direct suggestions format)
+              else if (Array.isArray(parsed)) {
+                fullText += JSON.stringify(parsed);
+                console.log("[Streaming]   ✅ Extracted array:", JSON.stringify(parsed).substring(0, 100));
+              } else {
+                console.log("[Streaming]   No content in delta or array");
               }
             } catch (e) {
-              console.warn("[Streaming] Could not parse line:", line.substring(0, 100));
+              console.warn("[Streaming]   ❌ Could not parse:", e instanceof Error ? e.message : String(e));
               // Keep processing
             }
           }
@@ -180,19 +201,23 @@ export default function Home() {
 
       // Process any remaining data in buffer
       if (buffer.trim() && buffer.trim() !== "[DONE]") {
+        console.log("[Streaming] Processing remaining buffer:", buffer.substring(0, 100));
         try {
           const parsed = JSON.parse(buffer);
           if (parsed.choices?.[0]?.delta?.content) {
             fullText += parsed.choices[0].delta.content;
             console.log("[Streaming] Received final chunk:", JSON.stringify(parsed.choices[0].delta.content));
+          } else if (Array.isArray(parsed)) {
+            fullText += JSON.stringify(parsed);
+            console.log("[Streaming] Received final array:", JSON.stringify(parsed).substring(0, 100));
           }
         } catch (e) {
-          console.warn("[Streaming] Could not parse final buffer:", buffer.substring(0, 100));
+          console.warn("[Streaming] Could not parse final buffer:", e instanceof Error ? e.message : String(e));
         }
       }
 
       console.log("[Suggestions] Full text accumulated (" + fullText.length + " chars)");
-      console.log("[Suggestions] First 200 chars:", fullText.substring(0, 200));
+      console.log("[Suggestions] Content:", JSON.stringify(fullText.substring(0, 300)));
 
       // Try to extract JSON array from accumulated text
       console.log("[Parsing] Starting suggestion parsing...");
@@ -439,20 +464,17 @@ export default function Home() {
     }
   }
 
-  // Set up auto-refresh of suggestions
+  // Set up auto-refresh of suggestions when transcript updates
+  const prevTranscriptLengthRef = useRef(session.transcript.length);
+  
   useEffect(() => {
-    if (isRecording) {
-      suggestionsTimerRef.current = setInterval(() => {
-        generateSuggestions();
-      }, 30000);
+    // If transcript grew (a new chunk was added)
+    if (session.transcript.length > prevTranscriptLengthRef.current) {
+      generateSuggestions();
     }
-
-    return () => {
-      if (suggestionsTimerRef.current) {
-        clearInterval(suggestionsTimerRef.current);
-      }
-    };
-  }, [isRecording, session.transcript]);
+    prevTranscriptLengthRef.current = session.transcript.length;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.transcript.length]);
 
   // Require API key on page load
   useEffect(() => {
@@ -468,18 +490,6 @@ export default function Home() {
 
     // Remove leading/trailing whitespace
     str = str.trim();
-
-    // Fix missing colons between key and value (e.g., "preview "value"" -> "preview":"value")
-    str = str.replace(/"(\w+)\s+"([^"]+)"/g, '"$1":"$2"');
-
-    // Fix single quotes to double quotes (but be careful with contractions)
-    str = str.replace(/'/g, '"');
-
-    // Fix escaped quotes that might cause issues
-    str = str.replace(/\\"/g, '"');
-
-    // Fix newlines in string values
-    str = str.replace(/\n/g, " ");
 
     return str;
   }

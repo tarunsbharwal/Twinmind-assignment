@@ -19,6 +19,12 @@ export function useAudioCapture({
   const chunkTimerRef = useRef<NodeJS.Timeout | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
+  // Use a ref for the callback so we always call the latest version without restarting recording
+  const onChunkReadyRef = useRef(onChunkReady);
+  useEffect(() => {
+    onChunkReadyRef.current = onChunkReady;
+  }, [onChunkReady]);
+
   const startRecording = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -50,12 +56,12 @@ export function useAudioCapture({
           // Wait a bit for ondataavailable to fire, then restart
           setTimeout(() => {
             if (chunksRef.current.length > 0) {
-              const blob = new Blob(chunksRef.current, { type: "audio/wav" });
+              const blob = new Blob(chunksRef.current, { type: "audio/webm" });
               const reader = new FileReader();
               reader.onload = () => {
                 const base64 = (reader.result as string).split(",")[1];
-                if (onChunkReady) {
-                  onChunkReady(base64);
+                if (onChunkReadyRef.current) {
+                  onChunkReadyRef.current(base64);
                 }
               };
               reader.readAsDataURL(blob);
@@ -79,11 +85,29 @@ export function useAudioCapture({
         );
       }
     }
-  }, [chunkDurationMs, onChunkReady, onError]);
+  }, [chunkDurationMs, onError]);
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
+      const recorder = mediaRecorderRef.current;
+
+      // Process final chunk before stopping completely
+      recorder.onstop = () => {
+        if (chunksRef.current.length > 0) {
+          const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+          const reader = new FileReader();
+          reader.onload = () => {
+            const base64 = (reader.result as string).split(",")[1];
+            if (onChunkReadyRef.current) {
+              onChunkReadyRef.current(base64);
+            }
+          };
+          reader.readAsDataURL(blob);
+        }
+        chunksRef.current = [];
+      };
+
+      recorder.stop();
       setIsRecording(false);
 
       if (chunkTimerRef.current) {
@@ -103,9 +127,11 @@ export function useAudioCapture({
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      stopRecording();
+      if (isRecording) {
+        stopRecording();
+      }
     };
-  }, [stopRecording]);
+  }, [isRecording, stopRecording]);
 
   return {
     isRecording,

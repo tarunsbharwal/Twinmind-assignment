@@ -9,7 +9,7 @@ Your suggestions should be:
 1. DIVERSE - Mix of questions, answers, talking points, fact-checks, and clarifications
 2. CONTEXTUAL - Based on what was just said, not generic
 3. ACTIONABLE - Each suggestion should be immediately useful
-4. CONCISE - Previews must be 30-40 chars max
+4. HIGHLY SPECIFIC - Previews must be 70-100 chars. Include specific technical details, numbers, or architectural insights. Never over-summarize into generic phrases. Use a "Topic: Detailed Insight" format or direct technical questions.
 
 Analyze the recent conversation and generate exactly 3 suggestions that would be most helpful RIGHT NOW.
 
@@ -22,9 +22,9 @@ Consider these types:
 
 Return ONLY this exact JSON format with NO extra characters:
 [
-  {"tag":"TYPE","preview":"Short text"},
-  {"tag":"TYPE","preview":"Short text"},
-  {"tag":"TYPE","preview":"Short text"}
+  {"tag":"QUESTION","preview":"What's your current p99 latency on websocket round-trips?"},
+  {"tag":"TALKING_POINT","preview":"Discord's sharding model: 2,500 guilds per shard, ~150k concurrent users."},
+  {"tag":"FACT_CHECK","preview":"Fact-check: Slack's 2024 outage was a config push, not capacity."}
 ]
 
 Do not repeat suggestions from recent batches that are still visible.`,

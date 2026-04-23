@@ -1,0 +1,61 @@
+===============================================================================
+DEBUGGING REPORT: Prompt Engineering & JSON Parsing Corruptions
+===============================================================================
+
+DATE: 2026-04-23
+ISSUES:
+1. LLM generated overly brief (3-word) or overly wordy suggestions that did not match the prototype.
+2. Next.js Turbopack heavily cached prompt constants, preventing "Reset to default" from working.
+3. Valid JSON from the LLM suddenly started throwing "Expected ',' or '}'" parsing errors.
+
+===============================================================================
+PHASE 1: PROMPT ENGINEERING & THE PROTOTYPE STYLE
+===============================================================================
+
+Initial Problem:
+The LLM was generating 3-word previews (e.g., "Dev role trends").
+Root Cause: The prompt instructed a limit of `30-40 chars max` and the JSON example explicitly anchored the LLM with `{"preview": "Short text <= 40 chars"}`.
+
+First Iteration:
+We increased the character limit to 60-90 and asked for "complete sentences". 
+Result: The LLM generated long, wordy sentences (e.g., "Sharding by user cohort could help distribute the load, but may also introduce..."). This was technically correct, but didn't match the punchy, highly-technical style of the prototype.
+
+Final Iteration (The Fix):
+We explicitly engineered the prompt to match the prototype's style:
+`4. HIGHLY SPECIFIC - Previews must be 70-100 chars. Include specific technical details, numbers, or architectural insights. Never over-summarize into generic phrases. Use a "Topic: Detailed Insight" format or direct technical questions.`
+Result: The LLM instantly matched the prototype, generating sharp, detailed insights like: `"Kafka costs: estimate $80k/month for 500k messages/second"`.
+
+===============================================================================
+PHASE 2: THE DESTRUCTIVE JSON REPAIR BUG
+===============================================================================
+
+Initial Problem:
+Once the LLM successfully started using the "Topic: Insight" format, the app started crashing with `JSON parsing failed: Expected ',' or '}' after property value`.
+
+Root Cause Analysis:
+The `app/page.tsx` file contained a `repairJSON()` function with an aggressive, global regex replacement intended to fix unquoted JSON keys:
+`str = str.replace(/(\w+):\s+/g, '"$1": ');`
+
+When the LLM generated a valid preview string like:
+`"preview": "Discord's sharding model: 2,500 guilds"`
+
+The regex blindly searched the entire string, found `model: `, and forcefully wrapped it in quotes. This mutated the valid JSON into:
+`"preview": "Discord's sharding "model": 2,500 guilds"`
+
+The injected, unescaped double-quote right in the middle of the value completely shattered the JSON string, causing `JSON.parse` to crash.
+
+The Fix:
+Modern LLMs (like Llama-3-70b) generate perfectly valid JSON natively. Attempting to "repair" JSON with naive global regexes causes more harm than good. The destructive `.replace()` calls were completely deleted from `repairJSON()`, allowing the raw, valid JSON to parse perfectly.
+
+===============================================================================
+PHASE 3: NEXT.JS TURBOPACK CACHE BUSTING
+===============================================================================
+
+Initial Problem:
+After updating `lib/prompts.ts`, clicking "Reset to default" in the Settings modal did nothing.
+
+Root Cause:
+Next.js Turbopack aggressively caches pure constant files. Because `lib/prompts.ts` wasn't a React component, Turbopack didn't forcefully push the updated constant to the running browser instance. Furthermore, the browser's `localStorage` was persistently holding onto the old settings.
+
+The Fix:
+To bypass the frozen browser state, we updated the localStorage key in `SessionContext.tsx` from `twinmind_settings` to `twinmind_settings_v3`. This completely invalidated the old cache, forcing the application to bootstrap fresh settings using the newest evaluated `DEFAULT_PROMPTS` directly from the file.

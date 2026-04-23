@@ -17,7 +17,7 @@ import {
 import { DEFAULT_PROMPTS, DEFAULT_CONTEXT_WINDOWS } from "@/lib/prompts";
 
 const SESSION_STORAGE_KEY = "twinmind_session";
-const SETTINGS_STORAGE_KEY = "twinmind_settings";
+const SETTINGS_STORAGE_KEY = "twinmind_settings_v3";
 
 interface SessionContextType {
   session: SessionState;

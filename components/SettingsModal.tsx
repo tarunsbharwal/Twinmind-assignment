@@ -129,12 +129,14 @@ export function SettingsModal({
                     rows={6}
                   />
                   <button
-                    onClick={() =>
+                    type="button"
+                    onClick={() => {
+                      console.log("Forcing reset to:", DEFAULT_PROMPTS.suggestions.substring(0, 50));
                       setFormData({
                         ...formData,
                         suggestionPrompt: DEFAULT_PROMPTS.suggestions,
-                      })
-                    }
+                      });
+                    }}
                     className="text-xs text-gray-400 hover:text-gray-300 mt-2"
                   >
                     Reset to default

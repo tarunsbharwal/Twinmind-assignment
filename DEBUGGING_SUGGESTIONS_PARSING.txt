@@ -1,0 +1,163 @@
+===============================================================================
+DEBUGGING REPORT: Suggestions Parsing Failure
+===============================================================================
+
+DATE: 2026-04-22
+ISSUE: JSON parsing failures when extracting suggestions from Groq API
+
+ERROR LOGS:
+-----------
+[browser] [Parsing] JSON parsing failed: Expected ',' or '}' after property value
+in JSON at position 42 (line 1 column 43) (app/page.tsx:255:19)
+[browser] [Parsing] Regex extraction found no matches, trying fallback... (app/page.tsx:286:21)
+[browser] [Parsing] Fallback also failed - no tags or previews found (app/page.tsx:319:23)
+[browser] Could not extract any suggestions from response (app/page.tsx:337:17)
+
+This error repeated multiple times during testing.
+
+===============================================================================
+ROOT CAUSE ANALYSIS
+===============================================================================
+
+The issue was in the streaming response parser (app/page.tsx, lines 169-202).
+
+PROBLEM:
+--------
+The Groq API returns suggestions as a JSON array format:
+  [{"tag":"QUESTION","preview":"What..."},{"tag":"ANSWER","preview":"..."}]
+
+However, the streaming parser only checked for:
+  1. Lines starting with "data: " (SSE format)
+  2. Lines starting with "{" (JSON objects)
+
+Since the JSON array starts with "[", it did NOT match either condition.
+Result: The JSON array was never extracted from the stream, fullText remained empty,
+and all subsequent parsing attempts failed.
+
+FILE AFFECTED:
+--------------
+  app/page.tsx - Streaming response handler
+
+SPECIFIC CODE LOCATION:
+  Lines 169-180: Format detection logic
+  Lines 182-202: Content extraction logic
+
+===============================================================================
+FIXES APPLIED
+===============================================================================
+
+FIX #1 - JSON Array Detection (Line 175)
+--------
+BEFORE:
+  else if (line.startsWith("{")) {
+    data = line;
+    console.log("[Streaming]   -> Raw JSON format detected");
+
+AFTER:
+  else if (line.startsWith("{") || line.startsWith("[")) {
+    data = line;
+    console.log("[Streaming]   -> Raw JSON format detected");
+
+REASON: Now recognizes both JSON objects and JSON arrays in the stream.
+
+
+FIX #2 - JSON Array Extraction (Lines 192-194)
+--------
+BEFORE:
+  if (parsed.choices?.[0]?.delta?.content) {
+    const content = parsed.choices[0].delta.content;
+    fullText += content;
+    console.log("[Streaming]   ✅ Extracted content:", JSON.stringify(content));
+  } else {
+    console.log("[Streaming]   No content in delta");
+  }
+
+AFTER:
+  if (parsed.choices?.[0]?.delta?.content) {
+    const content = parsed.choices[0].delta.content;
+    fullText += content;
+    console.log("[Streaming]   ✅ Extracted content:", JSON.stringify(content));
+  }
+  // Handle raw JSON array (direct suggestions format)
+  else if (Array.isArray(parsed)) {
+    fullText += JSON.stringify(parsed);
+    console.log("[Streaming]   ✅ Extracted array:", JSON.stringify(parsed).substring(0, 100));
+  } else {
+    console.log("[Streaming]   No content in delta or array");
+  }
+
+REASON: When the parsed data is a JSON array (not an OpenAI format object),
+it's now accumulated directly into fullText instead of being skipped.
+
+
+FIX #3 - Buffer Processing (Lines 214-216)
+--------
+Applied the same Array.isArray() check to the remaining buffer processing
+to handle arrays that might be split across chunks.
+
+BEFORE:
+  if (parsed.choices?.[0]?.delta?.content) {
+    fullText += parsed.choices[0].delta.content;
+    console.log("[Streaming] Received final chunk:", JSON.stringify(parsed.choices[0].delta.content));
+  }
+
+AFTER:
+  if (parsed.choices?.[0]?.delta?.content) {
+    fullText += parsed.choices[0].delta.content;
+    console.log("[Streaming] Received final chunk:", JSON.stringify(parsed.choices[0].delta.content));
+  } else if (Array.isArray(parsed)) {
+    fullText += JSON.stringify(parsed);
+    console.log("[Streaming] Received final array:", JSON.stringify(parsed).substring(0, 100));
+  }
+
+REASON: Ensures consistent handling of both streaming formats across
+all stream processing code paths.
+
+===============================================================================
+EXPECTED BEHAVIOR AFTER FIX
+===============================================================================
+
+1. Groq API returns suggestions as JSON array in streaming format
+2. Browser recognizes "[" as start of JSON array
+3. JSON array is parsed and accumulated into fullText
+4. fullText contains valid JSON like: [{"tag":"QUESTION","preview":"..."},...]
+5. JSON parsing succeeds at line 239
+6. Suggestions are extracted and displayed correctly
+
+VERIFICATION:
+  - Check browser console for "[Streaming] ✅ Extracted array:" log messages
+  - Suggestions should now appear in the SuggestionsPanel without errors
+  - No more "Could not extract any suggestions" errors
+
+===============================================================================
+FILES MODIFIED
+===============================================================================
+
+app/page.tsx
+  - Line 175: Added || line.startsWith("[")
+  - Lines 192-194: Added Array.isArray() check
+  - Lines 214-216: Added Array.isArray() check to buffer processing
+
+===============================================================================
+RELATED CONTEXT
+===============================================================================
+
+System Prompt (lib/prompts.ts):
+  The suggestions system prompt explicitly asks the Groq API to return
+  suggestions in this exact JSON format:
+  [
+    {"tag":"TYPE","preview":"Short text"},
+    {"tag":"TYPE","preview":"Short text"},
+    {"tag":"TYPE","preview":"Short text"}
+  ]
+
+API Endpoint (app/api/suggestions/route.ts):
+  - Calls groq.generateSuggestions(transcript, prompt)
+  - Returns raw stream from Groq API with Content-Type: text/event-stream
+  - Stream contains newline-delimited JSON
+
+Groq Client (lib/groq.ts):
+  - generateSuggestions() returns response.body as ReadableStream
+  - Groq API streams the JSON response in newline-delimited format
+
+===============================================================================
