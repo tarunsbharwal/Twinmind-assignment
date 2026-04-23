@@ -90,16 +90,15 @@ The system generates 3 diverse suggestions every ~30 seconds based on recent con
 
 2. **Avoiding Repetition:** System tracks last 3 suggestion batches and explicitly excludes them from new generations
 
-3. **Concise Previews:** Each card preview kept to 30-40 characters for scannability - the preview alone should deliver value
-
+3. **Concise but Specific Previews:** Each card preview is kept to 70-100 characters to provide highly specific, technical insights (e.g. "Topic: Insight") rather than generic summaries.
 4. **Context Window:** Includes last 10 transcript chunks (~2-3 minutes) for continuity without overwhelming the model
 
 5. **Smart Prompt Design:**
    ```
-   "You are TwinMind, an AI meeting suggestion engine.
-   Analyze the recent conversation and generate exactly 3 suggestions
-   that would be most helpful RIGHT NOW."
+   "You are TwinMind, an AI meeting suggestion engine...
+   HIGHLY SPECIFIC - Previews must be 70-100 chars. Include specific technical details, numbers, or architectural insights. Never over-summarize into generic phrases. Use a 'Topic: Detailed Insight' format."
    ```
+   - Enforces specific technical depth over generic summaries
    - Explicit instruction for "exactly 3"
    - "RIGHT NOW" emphasizes recency bias
    - JSON output format specified for structured parsing
@@ -149,6 +148,11 @@ The system generates 3 diverse suggestions every ~30 seconds based on recent con
 - `session.suggestionsHistory[]`: Last N suggestion batches (newest first)
 - `session.chatHistory[]`: Chat messages with responses and latencies
 - **Persistence:** Settings stored in localStorage; session data cleared on page reload (by design - "session-only" requirement)
+
+### Recent Architecture Fixes
+1. **Audio Latency:** Switched `MediaRecorder` Blob encoding to `audio/webm` to prevent 20-second FFmpeg demuxing stalls in Whisper API.
+2. **State Management:** Converted suggestion generation from a brittle `setInterval` to a reactive `useEffect` tied to `session.transcript.length`.
+3. **JSON Parsing:** Removed destructive regex "repairs" that corrupted valid JSON strings containing colons (e.g., `Topic: Insight`).
 
 ### Export Format
 
