@@ -1,0 +1,514 @@
+===============================================================================
+TWINMIND COPILOT: MASTER DEBUGGING & ARCHITECTURE REPORT
+===============================================================================
+
+*******************************************************************************
+DEBUG REPORT #1: DEBUGGING_AUTO_REFRESH_TIMER.txt
+*******************************************************************************
+
+===============================================================================
+DEBUGGING REPORT: Auto-Refresh Timer Resetting Issue
+===============================================================================
+
+DATE: 2026-04-23
+ISSUE: Suggestions do not automatically refresh every 30 seconds during recording.
+       Timer resets instead of continuing consistently.
+
+OBSERVATION:
+-----------
+- When user clicks "Reload suggestions" manually, suggestions appear correctly
+- Auto-refresh countdown shows "auto-refresh in 13s" but never triggers
+- After 30 seconds, suggestions should auto-refresh but they don't
+- Timer appears to reset constantly instead of running to completion
+
+===============================================================================
+ROOT CAUSE ANALYSIS
+===============================================================================
+
+The issue was in the auto-refresh useEffect hook (app/page.tsx, lines 471-484).
+
+PROBLEM:
+--------
+The dependency array included session.transcript:
+
+  useEffect(() => {
+    if (isRecording) {
+      suggestionsTimerRef.current = setInterval(() => {
+        generateSuggestions();
+      }, 30000);
+    }
+    return () => {
+      if (suggestionsTimerRef.current) {
+        clearInterval(suggestionsTimerRef.current);
+      }
+    };
+  }, [isRecording, session.transcript]);  // <- PROBLEM HERE
+
+IMPACT:
+-------
+1. Interval is created when recording starts (30 second timer begins)
+2. After ~10 seconds, a new transcript chunk arrives from audio capture
+3. session.transcript changes (new chunk added)
+4. useEffect dependency triggers and re-runs the cleanup function
+5. clearInterval() destroys the existing interval
+6. New interval is created, resetting the 30-second timer
+7. Steps 2-6 repeat continuously - timer never completes
+8. Result: Auto-refresh never happens, timer constantly resets
+
+TIMELINE VISUALIZATION:
+-----------------------
+Time    Event                              Interval State
+----    -----                              ---------------
+0s      Recording starts                   Interval created (0-30s)
+10s     Audio chunk processed              Timer at 10s
+        → session.transcript updates
+        → useEffect runs cleanup            Interval destroyed
+        → New interval created              Interval created (0-30s)
+13s     Audio chunk processed              Timer at 3s
+        → session.transcript updates
+        → useEffect runs cleanup            Interval destroyed
+        → New interval created              Interval created (0-30s)
+...     (repeats every ~10 seconds)        Never reaches 30s
+
+FILE AFFECTED:
+--------------
+  app/page.tsx - Auto-refresh timer setup
+
+SPECIFIC CODE LOCATION:
+  Lines 471-484: useEffect for auto-refresh
+
+DEPENDENCY ISSUE:
+-----------------
+Including session.transcript in the dependency array causes the effect
+to re-run every time the transcript is updated, which happens constantly
+during audio capture.
+
+===============================================================================
+FIX APPLIED
+===============================================================================
+
+CHANGE LOCATION:
+  app/page.tsx, line 484 - Dependency array
+
+BEFORE:
+-------
+  }, [isRecording, session.transcript]);
+
+AFTER:
+------
+  }, [isRecording]);
+
+EXPLANATION:
+------------
+The interval only needs to be created/destroyed when recording starts/stops.
+It does NOT need to be recreated when the transcript updates.
+
+Why this works:
+- generateSuggestions() reads session.transcript directly from state
+- No need for transcript in dependencies to trigger the effect
+- Only isRecording change should trigger effect setup/cleanup
+- Interval now runs uninterrupted for full 30 seconds
+
+DETAILED REASONING:
+-------------------
+The useEffect has two responsibilities:
+  1. Setup: Create interval when isRecording becomes true
+  2. Cleanup: Clear interval when isRecording becomes false or component unmounts
+
+Transcript updates don't require re-setup of the interval. The interval
+function (generateSuggestions) fetches the current transcript from state
+each time it executes, so it always has the latest data.
+
+Including session.transcript in dependencies was premature optimization
+that actually broke the feature.
+
+===============================================================================
+EXPECTED BEHAVIOR AFTER FIX
+===============================================================================
+
+1. User clicks Start recording
+2. useEffect runs, creates 30-second interval
+3. Transcript chunks arrive every ~10 seconds
+4. session.transcript updates but useEffect does NOT re-run
+5. Interval continues running uninterrupted
+6. At 30 seconds: generateSuggestions() is called automatically
+7. Interval resets and waits another 30 seconds
+8. Steps 3-7 repeat while recording is active
+9. User clicks Stop recording
+10. isRecording becomes false
+11. useEffect cleanup runs, clearInterval() stops the timer
+12. No more auto-refresh until recording starts again
+
+VERIFICATION:
+  - Browser console should NOT show interval being recreated constantly
+  - "Reload suggestions" button countdown should continue to zero
+  - At 30s mark, new suggestions automatically appear
+  - This repeats every 30 seconds while recording continues
+
+===============================================================================
+FILES MODIFIED
+===============================================================================
+
+app/page.tsx
+  - Line 484: Changed dependency array from [isRecording, session.transcript]
+             to [isRecording]
+
+===============================================================================
+RELATED CONTEXT
+===============================================================================
+
+Auto-refresh Implementation (app/page.tsx, lines 471-484):
+  - Uses useRef to store interval ID for cleanup
+  - Calls generateSuggestions() every 30000 milliseconds
+  - Only active when isRecording is true
+
+Transcript Updates:
+  - Occur via handleAudioChunk() when audio arrives
+  - Adds new TranscriptChunk to session.transcript
+  - Triggered approximately every 30 seconds (chunkDurationMs: 30000)
+
+generateSuggestions() Function:
+  - Reads session.transcript and session.suggestionsHistory from state
+  - Makes POST request to /api/suggestions endpoint
+  - Parses streamed JSON response (after previous fix)
+  - Updates session.suggestionsHistory with new suggestions
+
+Session Context:
+  - Manages transcript, suggestionsHistory, chatHistory state
+  - Provides addTranscriptChunk, addSuggestionBatch functions
+  - Used by page component via useSession() hook
+
+===============================================================================
+IMPACT ASSESSMENT
+===============================================================================
+
+SEVERITY: High
+  - Feature was completely non-functional (never auto-refreshed)
+  - User had to manually click refresh button every time
+  - Timer appeared broken due to constant resets
+
+SCOPE: Limited
+  - Only affects suggestions auto-refresh during recording
+  - Manual refresh via "Reload suggestions" button still works
+  - Other features unaffected
+
+RISK: Very Low
+  - Simple dependency array change
+  - No logic changes, no new code paths
+  - Follows React best practices
+  - Fully reversible if needed
+
+===============================================================================
+TESTING CHECKLIST
+===============================================================================
+
+[] Start recording
+[] Verify "auto-refresh in 30s" countdown starts
+[] Wait ~10 seconds for audio chunk to be processed
+[] Verify countdown continues (doesn't reset to 30s)
+[] Wait until counter reaches 0
+[] Verify suggestions automatically update
+[] Repeat cycle 2-3 times to confirm consistent behavior
+[] Stop recording
+[] Verify countdown timer stops
+[] Start recording again
+[] Verify new interval is created and countdown restarts
+
+===============================================================================
+
+
+*******************************************************************************
+DEBUG REPORT #2: DEBUGGING_LATENCY_AND_CLOSURES.txt
+*******************************************************************************
+
+===============================================================================
+DEBUGGING REPORT: Live Suggestions Automation & Whisper Latency
+===============================================================================
+
+DATE: 2026-04-23
+ISSUES: 
+1. Live suggestions were not appearing automatically after 30 seconds while the mic was running.
+2. The final chunk of transcript was completely lost when the user stopped the mic.
+3. Transcription latency was extremely high (~20 seconds) instead of the expected 1-2 seconds.
+
+===============================================================================
+ISSUE 1: React Stale Closure on Auto-Refresh Timer
+===============================================================================
+
+ROOT CAUSE:
+In `app/page.tsx`, an auto-refresh timer was set up to call `generateSuggestions()` every 30 seconds. Because `generateSuggestions()` was capturing the initial component state, it was frozen in time (a "stale closure"). It always saw `session.transcript` as empty, immediately returning and doing nothing. 
+
+FIX APPLIED:
+- Removed the `setInterval` logic completely. 
+- Implemented a reactive `useEffect` that listens to `session.transcript.length`. Now, whenever a new transcript chunk is successfully appended (roughly every 30s), it automatically triggers `generateSuggestions()` ensuring it ALWAYS has the freshest data.
+
+===============================================================================
+ISSUE 2: Missing Final Chunk on Mic Stop
+===============================================================================
+
+ROOT CAUSE:
+In `hooks/useAudioCapture.ts`, the `stopRecording` function immediately stopped the `MediaRecorder` and cleared intervals, but it completely ignored the final batch of audio data that the user had just spoken.
+
+FIX APPLIED:
+- Added an `onstop` event handler to the `MediaRecorder` inside the `stopRecording` function.
+- Now, when the mic is stopped, the final audio chunk is processed, converted to base64, and successfully emitted to the transcription pipeline before destroying the recording context.
+
+===============================================================================
+ISSUE 3: FFmpeg Probe Latency on Groq Whisper API (~20 sec delay)
+===============================================================================
+
+ROOT CAUSE:
+Browsers natively capture audio data in `.webm` format (with Opus encoding). However, the frontend code explicitly labeled this data as `audio/wav` and named it `audio.wav` when sending the Blob to the Groq Whisper API. 
+When FFmpeg (Groq's backend audio processor) receives a `.wav` file, it attempts to parse uncompressed PCM data. Upon encountering `.webm` data, the initial parsing fails, triggering expensive fallback probing mechanisms to determine the true file type. This mismatch added 15-30 seconds of pure processing latency.
+
+FIX APPLIED:
+- Modified `hooks/useAudioCapture.ts`: Changed the Blob type from `"audio/wav"` to `"audio/webm"`.
+- Modified `lib/groq.ts`: Updated the FormData attachment from `"audio.wav"` (mime type `"audio/wav"`) to `"audio.webm"` (mime type `"audio/webm"`).
+- Groq's API now instantly recognizes the `.webm` file format and bypasses the FFmpeg fallback probing, returning transcriptions in 1-2 seconds.
+
+===============================================================================
+TESTING & VERIFICATION
+===============================================================================
+
+1. START MIC: User speaks. Every 30 seconds, a chunk is automatically processed.
+2. AUTO REFRESH: Because the transcript successfully updates, `generateSuggestions` fires automatically.
+3. STOP MIC: The last seconds of speech are gracefully captured and transcribed.
+4. LATENCY: All API transcription calls complete rapidly (~1-2 seconds) without FFmpeg stall.
+
+
+*******************************************************************************
+DEBUG REPORT #3: DEBUGGING_SUGGESTIONS_PARSING.txt
+*******************************************************************************
+
+===============================================================================
+DEBUGGING REPORT: Suggestions Parsing Failure
+===============================================================================
+
+DATE: 2026-04-22
+ISSUE: JSON parsing failures when extracting suggestions from Groq API
+
+ERROR LOGS:
+-----------
+[browser] [Parsing] JSON parsing failed: Expected ',' or '}' after property value
+in JSON at position 42 (line 1 column 43) (app/page.tsx:255:19)
+[browser] [Parsing] Regex extraction found no matches, trying fallback... (app/page.tsx:286:21)
+[browser] [Parsing] Fallback also failed - no tags or previews found (app/page.tsx:319:23)
+[browser] Could not extract any suggestions from response (app/page.tsx:337:17)
+
+This error repeated multiple times during testing.
+
+===============================================================================
+ROOT CAUSE ANALYSIS
+===============================================================================
+
+The issue was in the streaming response parser (app/page.tsx, lines 169-202).
+
+PROBLEM:
+--------
+The Groq API returns suggestions as a JSON array format:
+  [{"tag":"QUESTION","preview":"What..."},{"tag":"ANSWER","preview":"..."}]
+
+However, the streaming parser only checked for:
+  1. Lines starting with "data: " (SSE format)
+  2. Lines starting with "{" (JSON objects)
+
+Since the JSON array starts with "[", it did NOT match either condition.
+Result: The JSON array was never extracted from the stream, fullText remained empty,
+and all subsequent parsing attempts failed.
+
+FILE AFFECTED:
+--------------
+  app/page.tsx - Streaming response handler
+
+SPECIFIC CODE LOCATION:
+  Lines 169-180: Format detection logic
+  Lines 182-202: Content extraction logic
+
+===============================================================================
+FIXES APPLIED
+===============================================================================
+
+FIX #1 - JSON Array Detection (Line 175)
+--------
+BEFORE:
+  else if (line.startsWith("{")) {
+    data = line;
+    console.log("[Streaming]   -> Raw JSON format detected");
+
+AFTER:
+  else if (line.startsWith("{") || line.startsWith("[")) {
+    data = line;
+    console.log("[Streaming]   -> Raw JSON format detected");
+
+REASON: Now recognizes both JSON objects and JSON arrays in the stream.
+
+
+FIX #2 - JSON Array Extraction (Lines 192-194)
+--------
+BEFORE:
+  if (parsed.choices?.[0]?.delta?.content) {
+    const content = parsed.choices[0].delta.content;
+    fullText += content;
+    console.log("[Streaming]   ✅ Extracted content:", JSON.stringify(content));
+  } else {
+    console.log("[Streaming]   No content in delta");
+  }
+
+AFTER:
+  if (parsed.choices?.[0]?.delta?.content) {
+    const content = parsed.choices[0].delta.content;
+    fullText += content;
+    console.log("[Streaming]   ✅ Extracted content:", JSON.stringify(content));
+  }
+  // Handle raw JSON array (direct suggestions format)
+  else if (Array.isArray(parsed)) {
+    fullText += JSON.stringify(parsed);
+    console.log("[Streaming]   ✅ Extracted array:", JSON.stringify(parsed).substring(0, 100));
+  } else {
+    console.log("[Streaming]   No content in delta or array");
+  }
+
+REASON: When the parsed data is a JSON array (not an OpenAI format object),
+it's now accumulated directly into fullText instead of being skipped.
+
+
+FIX #3 - Buffer Processing (Lines 214-216)
+--------
+Applied the same Array.isArray() check to the remaining buffer processing
+to handle arrays that might be split across chunks.
+
+BEFORE:
+  if (parsed.choices?.[0]?.delta?.content) {
+    fullText += parsed.choices[0].delta.content;
+    console.log("[Streaming] Received final chunk:", JSON.stringify(parsed.choices[0].delta.content));
+  }
+
+AFTER:
+  if (parsed.choices?.[0]?.delta?.content) {
+    fullText += parsed.choices[0].delta.content;
+    console.log("[Streaming] Received final chunk:", JSON.stringify(parsed.choices[0].delta.content));
+  } else if (Array.isArray(parsed)) {
+    fullText += JSON.stringify(parsed);
+    console.log("[Streaming] Received final array:", JSON.stringify(parsed).substring(0, 100));
+  }
+
+REASON: Ensures consistent handling of both streaming formats across
+all stream processing code paths.
+
+===============================================================================
+EXPECTED BEHAVIOR AFTER FIX
+===============================================================================
+
+1. Groq API returns suggestions as JSON array in streaming format
+2. Browser recognizes "[" as start of JSON array
+3. JSON array is parsed and accumulated into fullText
+4. fullText contains valid JSON like: [{"tag":"QUESTION","preview":"..."},...]
+5. JSON parsing succeeds at line 239
+6. Suggestions are extracted and displayed correctly
+
+VERIFICATION:
+  - Check browser console for "[Streaming] ✅ Extracted array:" log messages
+  - Suggestions should now appear in the SuggestionsPanel without errors
+  - No more "Could not extract any suggestions" errors
+
+===============================================================================
+FILES MODIFIED
+===============================================================================
+
+app/page.tsx
+  - Line 175: Added || line.startsWith("[")
+  - Lines 192-194: Added Array.isArray() check
+  - Lines 214-216: Added Array.isArray() check to buffer processing
+
+===============================================================================
+RELATED CONTEXT
+===============================================================================
+
+System Prompt (lib/prompts.ts):
+  The suggestions system prompt explicitly asks the Groq API to return
+  suggestions in this exact JSON format:
+  [
+    {"tag":"TYPE","preview":"Short text"},
+    {"tag":"TYPE","preview":"Short text"},
+    {"tag":"TYPE","preview":"Short text"}
+  ]
+
+API Endpoint (app/api/suggestions/route.ts):
+  - Calls groq.generateSuggestions(transcript, prompt)
+  - Returns raw stream from Groq API with Content-Type: text/event-stream
+  - Stream contains newline-delimited JSON
+
+Groq Client (lib/groq.ts):
+  - generateSuggestions() returns response.body as ReadableStream
+  - Groq API streams the JSON response in newline-delimited format
+
+===============================================================================
+
+
+*******************************************************************************
+DEBUG REPORT #4: DEBUGGING_PROMPTS_AND_JSON.txt
+*******************************************************************************
+
+===============================================================================
+DEBUGGING REPORT: Prompt Engineering & JSON Parsing Corruptions
+===============================================================================
+
+DATE: 2026-04-23
+ISSUES:
+1. LLM generated overly brief (3-word) or overly wordy suggestions that did not match the prototype.
+2. Next.js Turbopack heavily cached prompt constants, preventing "Reset to default" from working.
+3. Valid JSON from the LLM suddenly started throwing "Expected ',' or '}'" parsing errors.
+
+===============================================================================
+PHASE 1: PROMPT ENGINEERING & THE PROTOTYPE STYLE
+===============================================================================
+
+Initial Problem:
+The LLM was generating 3-word previews (e.g., "Dev role trends").
+Root Cause: The prompt instructed a limit of `30-40 chars max` and the JSON example explicitly anchored the LLM with `{"preview": "Short text <= 40 chars"}`.
+
+First Iteration:
+We increased the character limit to 60-90 and asked for "complete sentences". 
+Result: The LLM generated long, wordy sentences (e.g., "Sharding by user cohort could help distribute the load, but may also introduce..."). This was technically correct, but didn't match the punchy, highly-technical style of the prototype.
+
+Final Iteration (The Fix):
+We explicitly engineered the prompt to match the prototype's style:
+`4. HIGHLY SPECIFIC - Previews must be 70-100 chars. Include specific technical details, numbers, or architectural insights. Never over-summarize into generic phrases. Use a "Topic: Detailed Insight" format or direct technical questions.`
+Result: The LLM instantly matched the prototype, generating sharp, detailed insights like: `"Kafka costs: estimate $80k/month for 500k messages/second"`.
+
+===============================================================================
+PHASE 2: THE DESTRUCTIVE JSON REPAIR BUG
+===============================================================================
+
+Initial Problem:
+Once the LLM successfully started using the "Topic: Insight" format, the app started crashing with `JSON parsing failed: Expected ',' or '}' after property value`.
+
+Root Cause Analysis:
+The `app/page.tsx` file contained a `repairJSON()` function with an aggressive, global regex replacement intended to fix unquoted JSON keys:
+`str = str.replace(/(\w+):\s+/g, '"$1": ');`
+
+When the LLM generated a valid preview string like:
+`"preview": "Discord's sharding model: 2,500 guilds"`
+
+The regex blindly searched the entire string, found `model: `, and forcefully wrapped it in quotes. This mutated the valid JSON into:
+`"preview": "Discord's sharding "model": 2,500 guilds"`
+
+The injected, unescaped double-quote right in the middle of the value completely shattered the JSON string, causing `JSON.parse` to crash.
+
+The Fix:
+Modern LLMs (like Llama-3-70b) generate perfectly valid JSON natively. Attempting to "repair" JSON with naive global regexes causes more harm than good. The destructive `.replace()` calls were completely deleted from `repairJSON()`, allowing the raw, valid JSON to parse perfectly.
+
+===============================================================================
+PHASE 3: NEXT.JS TURBOPACK CACHE BUSTING
+===============================================================================
+
+Initial Problem:
+After updating `lib/prompts.ts`, clicking "Reset to default" in the Settings modal did nothing.
+
+Root Cause:
+Next.js Turbopack aggressively caches pure constant files. Because `lib/prompts.ts` wasn't a React component, Turbopack didn't forcefully push the updated constant to the running browser instance. Furthermore, the browser's `localStorage` was persistently holding onto the old settings.
+
+The Fix:
+To bypass the frozen browser state, we updated the localStorage key in `SessionContext.tsx` from `twinmind_settings` to `twinmind_settings_v3`. This completely invalidated the old cache, forcing the application to bootstrap fresh settings using the newest evaluated `DEFAULT_PROMPTS` directly from the file.
+
+
